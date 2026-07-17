@@ -142,6 +142,10 @@ local afkFarmEnabled = false
 local lastTriggeredMinuteKey = nil
 local afkFarmButton, setAfkButtonColor -- forward declared
 
+-- NEW: how long / how often to repeatedly teleport to Hub before starting the loop
+local HUB_REPEAT_DURATION = 15  -- seconds
+local HUB_REPEAT_INTERVAL = 1   -- seconds between each teleport
+
 task.spawn(function()
     while true do
         if afkFarmEnabled then
@@ -152,9 +156,19 @@ task.spawn(function()
 
             if key ~= lastTriggeredMinuteKey then
                 if t.min == 29 or t.min == 59 then
-                    print("[AFK Farm] Trigger match: :29/:59 -> saving position, teleporting to Hub, starting loop")
+                    print("[AFK Farm] Trigger match: :29/:59 -> saving position, repeat-teleporting to Hub")
                     saveCurrentPosition()
-                    teleportTo(hubLocation)
+
+                    -- NEW: keep teleporting to Hub every 1s for 15s straight
+                    local elapsed = 0
+                    while elapsed < HUB_REPEAT_DURATION do
+                        teleportTo(hubLocation)
+                        task.wait(HUB_REPEAT_INTERVAL)
+                        elapsed += HUB_REPEAT_INTERVAL
+                    end
+                    print("[AFK Farm] Done repeat-teleporting to Hub -> waiting 10s before starting loop")
+                    task.wait(10)
+                    print("[AFK Farm] Wait done -> starting loop and auto-return timer")
 
                     if not looping then
                         startLoop()
