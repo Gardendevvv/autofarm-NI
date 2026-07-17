@@ -44,7 +44,7 @@ local function teleportTo(loc)
     print("[TeleportGui] Teleported to " .. (loc.name or "unknown") .. " at " .. os.date("%X"))
 end
 
--- ===== SAVED POSITION (for End Trial) =====
+-- ===== SAVED POSITION (for End Trial / auto-return) =====
 local savedOriginalPosition = nil
 
 local function saveCurrentPosition()
@@ -96,6 +96,47 @@ local function stopLoop()
     print("[TeleportGui] Trial Mob loop STOPPED at " .. os.date("%X"))
 end
 
+local function resetLoopButtonVisual()
+    if loopToggleButton and setLoopButtonColor then
+        loopToggleButton.Text = "▶ Start Trial Mob Loop"
+        setLoopButtonColor(Color3.fromRGB(46, 204, 113))
+    end
+end
+
+-- ===== AUTO-RETURN TIMER (user-configurable, capped 1-30 min, toggleable) =====
+local autoReturnMinutes = 25 -- default; user can change via GUI, clamped 1-30
+local autoReturnEnabled = true -- NEW: toggle on/off
+local autoReturnTimerId = 0
+local autoReturnButton, setAutoReturnButtonColor -- forward declared
+
+local function startAutoReturnTimer()
+    if not autoReturnEnabled then
+        print("[TeleportGui] Auto-return is OFF -> not starting timer")
+        return
+    end
+
+    autoReturnTimerId += 1
+    local myTimerId = autoReturnTimerId
+    local durationSeconds = autoReturnMinutes * 60
+    print(string.format("[TeleportGui] Auto-return timer started: %d min", autoReturnMinutes))
+
+    task.delay(durationSeconds, function()
+        if myTimerId ~= autoReturnTimerId then return end -- superseded by a newer cycle
+        if not autoReturnEnabled then
+            print("[TeleportGui] Auto-return timer fired but feature is OFF -> skipping")
+            return
+        end
+        print(string.format("[TeleportGui] %d minutes elapsed -> stopping loop and returning to original position", autoReturnMinutes))
+        stopLoop()
+        resetLoopButtonVisual()
+        returnToSavedPosition()
+    end)
+end
+
+local function cancelAutoReturnTimer()
+    autoReturnTimerId += 1
+end
+
 -- ===== AFK FARM SCHEDULE (every hour, real-life :29 and :59) =====
 local afkFarmEnabled = false
 local lastTriggeredMinuteKey = nil
@@ -111,9 +152,19 @@ task.spawn(function()
 
             if key ~= lastTriggeredMinuteKey then
                 if t.min == 29 or t.min == 59 then
-                    print("[AFK Farm] Trigger match: :29/:59 -> saving position, teleporting to Hub")
+                    print("[AFK Farm] Trigger match: :29/:59 -> saving position, teleporting to Hub, starting loop")
                     saveCurrentPosition()
                     teleportTo(hubLocation)
+
+                    if not looping then
+                        startLoop()
+                        if loopToggleButton then
+                            loopToggleButton.Text = "■ Stop Loop"
+                            setLoopButtonColor(Color3.fromRGB(231, 76, 60))
+                        end
+                    end
+
+                    startAutoReturnTimer()
                     lastTriggeredMinuteKey = key
                 end
             end
@@ -161,15 +212,15 @@ toggleStroke.Parent = toggleButton
 -- Main draggable + resizable frame
 local frame = Instance.new("Frame")
 frame.Name = "MainFrame"
-frame.Size = UDim2.new(0, 340, 0, 280)
-frame.Position = UDim2.new(0, 100, 0.5, -140)
+frame.Size = UDim2.new(0, 340, 0, 380)
+frame.Position = UDim2.new(0, 100, 0.5, -190)
 frame.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
 frame.BorderSizePixel = 0
 frame.Visible = true
 frame.Active = true
 frame.Parent = screenGui
 
-local MIN_WIDTH, MIN_HEIGHT = 280, 240
+local MIN_WIDTH, MIN_HEIGHT = 280, 300
 
 local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 14)
@@ -335,8 +386,6 @@ layout.SortOrder = Enum.SortOrder.LayoutOrder
 layout.Parent = scrollFrame
 
 -- ===== Helper: creates a TOGGLE-safe button (fixes the stuck-color bug) =====
--- Uses a "BaseColor" attribute so hover effects always know the real current color,
--- instead of a stale closure value that gets out of sync after toggling.
 local function createToggleButton(text, initialColor, layoutOrder)
     local button = Instance.new("TextButton")
     button.Size = UDim2.new(1, 0, 0, 38)
@@ -429,14 +478,65 @@ delayBox.FocusLost:Connect(function()
     end
 end)
 
+-- Auto-return duration input row
+local returnRow = Instance.new("Frame")
+returnRow.Size = UDim2.new(1, 0, 0, 36)
+returnRow.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+returnRow.LayoutOrder = 2
+returnRow.Parent = scrollFrame
+
+local returnRowCorner = Instance.new("UICorner")
+returnRowCorner.CornerRadius = UDim.new(0, 10)
+returnRowCorner.Parent = returnRow
+
+local returnLabel = Instance.new("TextLabel")
+returnLabel.Size = UDim2.new(0.6, 0, 1, 0)
+returnLabel.Position = UDim2.new(0, 10, 0, 0)
+returnLabel.BackgroundTransparency = 1
+returnLabel.Text = "⏳  Auto-return after (min)"
+returnLabel.TextColor3 = Color3.fromRGB(220, 220, 230)
+returnLabel.Font = Enum.Font.Gotham
+returnLabel.TextSize = 13
+returnLabel.TextXAlignment = Enum.TextXAlignment.Left
+returnLabel.Parent = returnRow
+
+local returnBox = Instance.new("TextBox")
+returnBox.Size = UDim2.new(0.32, 0, 0.7, 0)
+returnBox.Position = UDim2.new(0.66, 0, 0.15, 0)
+returnBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+returnBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+returnBox.Font = Enum.Font.GothamMedium
+returnBox.TextSize = 13
+returnBox.Text = tostring(autoReturnMinutes)
+returnBox.ClearTextOnFocus = false
+returnBox.Parent = returnRow
+
+local returnBoxCorner = Instance.new("UICorner")
+returnBoxCorner.CornerRadius = UDim.new(0, 6)
+returnBoxCorner.Parent = returnBox
+
+returnBox.FocusLost:Connect(function()
+    local num = tonumber(returnBox.Text)
+    if num then
+        num = math.floor(num)
+        if num < 1 then num = 1 end
+        if num > 30 then num = 30 end
+        autoReturnMinutes = num
+        returnBox.Text = tostring(autoReturnMinutes)
+        print("[TeleportGui] Auto-return duration set to " .. autoReturnMinutes .. " min")
+    else
+        returnBox.Text = tostring(autoReturnMinutes)
+    end
+end)
+
 -- Loop toggle button
-loopToggleButton, setLoopButtonColor = createToggleButton("▶ Start Trial Mob Loop", Color3.fromRGB(46, 204, 113), 2)
+loopToggleButton, setLoopButtonColor = createToggleButton("▶ Start Trial Mob Loop", Color3.fromRGB(46, 204, 113), 3)
 
 loopToggleButton.MouseButton1Click:Connect(function()
     if looping then
         stopLoop()
-        loopToggleButton.Text = "▶ Start Trial Mob Loop"
-        setLoopButtonColor(Color3.fromRGB(46, 204, 113))
+        cancelAutoReturnTimer()
+        resetLoopButtonVisual()
     else
         startLoop()
         loopToggleButton.Text = "■ Stop Loop"
@@ -444,8 +544,25 @@ loopToggleButton.MouseButton1Click:Connect(function()
     end
 end)
 
+-- Auto-Return toggle button (NEW)
+autoReturnButton, setAutoReturnButtonColor = createToggleButton("⏳  Auto-Return: ON", Color3.fromRGB(46, 204, 113), 4)
+
+autoReturnButton.MouseButton1Click:Connect(function()
+    autoReturnEnabled = not autoReturnEnabled
+    if autoReturnEnabled then
+        autoReturnButton.Text = "⏳  Auto-Return: ON"
+        setAutoReturnButtonColor(Color3.fromRGB(46, 204, 113))
+        print("[TeleportGui] Auto-Return enabled at " .. os.date("%X"))
+    else
+        autoReturnButton.Text = "⏳  Auto-Return: OFF"
+        setAutoReturnButtonColor(Color3.fromRGB(231, 76, 60))
+        cancelAutoReturnTimer() -- cancel any pending timer immediately when turned off
+        print("[TeleportGui] Auto-Return disabled at " .. os.date("%X"))
+    end
+end)
+
 -- AFK Farm toggle button
-afkFarmButton, setAfkButtonColor = createToggleButton("🤖  AFK Farm: OFF", Color3.fromRGB(231, 76, 60), 3)
+afkFarmButton, setAfkButtonColor = createToggleButton("🤖  AFK Farm: OFF", Color3.fromRGB(231, 76, 60), 5)
 
 afkFarmButton.MouseButton1Click:Connect(function()
     afkFarmEnabled = not afkFarmEnabled
@@ -460,12 +577,12 @@ afkFarmButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- End Trial button (returns to position saved before AFK Farm's Hub teleport)
-local endTrialButton, setEndTrialColor = createToggleButton("🔙  End Trial (Return)", Color3.fromRGB(52, 58, 80), 4)
+-- End Trial button (manual return, also cancels the auto-return timer)
+local endTrialButton, setEndTrialColor = createToggleButton("🔙  End Trial (Return)", Color3.fromRGB(52, 58, 80), 6)
 
 endTrialButton.MouseButton1Click:Connect(function()
     stopLoop()
-    loopToggleButton.Text = "▶ Start Trial Mob Loop"
-    setLoopButtonColor(Color3.fromRGB(46, 204, 113))
+    cancelAutoReturnTimer()
+    resetLoopButtonVisual()
     returnToSavedPosition()
 end)
