@@ -4,7 +4,7 @@ local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
--- ===== LOCATIONS =====
+-- ===== LOCATIONS (kept internally, not shown as buttons) =====
 local locations = {
     {name = "Hub",         x = 880.2955322265625, y = 10.880018315734863, z = 13419.056640625},
     {name = "Trial Mob 1", x = 749.7960205078125, y = 10.396933555603027, z = 13606.0791015625},
@@ -14,13 +14,9 @@ local locations = {
     {name = "Trial Mob 5", x = 694.6125488281875, y = 10.396934509217344, z = 13633.5009765625},
     {name = "Trial Mob 6", x = 722.7583078125,    y = 10.39693546295166,  z = 13639.6826171875},
     {name = "Trial Mob 7", x = 749.0018920898438, y = 10.39693546295166,  z = 13634.294921875},
-    {name = "Trial Mob 8", x = 750.8882446289062, y = 10.39693546295166,  z = 13605.6220703125},
 }
 
 local hubLocation = locations[1]
-
--- Where to send the character when the farm timer runs out (adjust as you like)
-local voidLocation = {x = 0, y = -500, z = 0}
 
 local trialMobLocations = {}
 for _, loc in ipairs(locations) do
@@ -45,25 +41,40 @@ local function teleportTo(loc)
         return
     end
     hrp.CFrame = CFrame.new(loc.x, loc.y, loc.z)
-    print("[TeleportGui] Teleported to " .. (loc.name or "void") .. " at " .. os.date("%X"))
+    print("[TeleportGui] Teleported to " .. (loc.name or "unknown") .. " at " .. os.date("%X"))
 end
 
--- ===== KILL CHARACTER FUNCTION =====
-local function endCharacter()
+-- ===== SAVED POSITION (for End Trial) =====
+local savedOriginalPosition = nil
+
+local function saveCurrentPosition()
     local character = player.Character
     if not character then return end
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    teleportTo(voidLocation)
-    if humanoid then
-        humanoid.Health = 0
-        print("[TeleportGui] Farm timer expired — character ended at " .. os.date("%X"))
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        savedOriginalPosition = hrp.CFrame
+        print("[TeleportGui] Saved original position at " .. os.date("%X"))
+    end
+end
+
+local function returnToSavedPosition()
+    if not savedOriginalPosition then
+        print("[TeleportGui] No saved position to return to")
+        return
+    end
+    local character = player.Character
+    if not character then return end
+    local hrp = character:WaitForChild("HumanoidRootPart", 5)
+    if hrp then
+        hrp.CFrame = savedOriginalPosition
+        print("[TeleportGui] Returned to original position at " .. os.date("%X"))
     end
 end
 
 -- ===== LOOP STATE =====
 local looping = false
 local loopDelay = 2
-local loopToggleButton -- forward declared
+local loopToggleButton, setLoopButtonColor -- forward declared
 
 local function startLoop()
     if looping then return end
@@ -85,36 +96,10 @@ local function stopLoop()
     print("[TeleportGui] Trial Mob loop STOPPED at " .. os.date("%X"))
 end
 
--- ===== FARM DURATION TIMER =====
-local farmDurationMinutes = 3
-local farmTimerId = 0
-
-local function startFarmTimer()
-    farmTimerId += 1
-    local myTimerId = farmTimerId
-    local durationSeconds = farmDurationMinutes * 60
-    print(string.format("[TeleportGui] Farm timer started: %d min (%ds)", farmDurationMinutes, durationSeconds))
-
-    task.delay(durationSeconds, function()
-        if myTimerId ~= farmTimerId then return end
-        print("[TeleportGui] Farm duration reached — stopping loop and ending run")
-        stopLoop()
-        if loopToggleButton then
-            loopToggleButton.Text = "▶ Start Trial Mob Loop"
-            loopToggleButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
-        end
-        endCharacter()
-    end)
-end
-
-local function cancelFarmTimer()
-    farmTimerId += 1
-end
-
--- ===== AFK FARM SCHEDULE (every hour, real-life time) =====
+-- ===== AFK FARM SCHEDULE (every hour, real-life :29 and :59) =====
 local afkFarmEnabled = false
 local lastTriggeredMinuteKey = nil
-local afkFarmButton -- forward declared
+local afkFarmButton, setAfkButtonColor -- forward declared
 
 task.spawn(function()
     while true do
@@ -125,21 +110,10 @@ task.spawn(function()
             print(string.format("[AFK Farm] Checking... current time = %s (min=%d)", os.date("%X"), t.min))
 
             if key ~= lastTriggeredMinuteKey then
-                if t.min == 28 or t.min == 58 then
-                    print("[AFK Farm] Trigger match: :28/:58 -> teleporting to Hub")
+                if t.min == 29 or t.min == 59 then
+                    print("[AFK Farm] Trigger match: :29/:59 -> saving position, teleporting to Hub")
+                    saveCurrentPosition()
                     teleportTo(hubLocation)
-                    lastTriggeredMinuteKey = key
-
-                elseif t.min == 29 or t.min == 59 then
-                    print("[AFK Farm] Trigger match: :29/:59 -> starting loop + farm timer")
-                    if not looping then
-                        startLoop()
-                        startFarmTimer()
-                        if loopToggleButton then
-                            loopToggleButton.Text = "■ Stop Loop"
-                            loopToggleButton.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
-                        end
-                    end
                     lastTriggeredMinuteKey = key
                 end
             end
@@ -187,15 +161,15 @@ toggleStroke.Parent = toggleButton
 -- Main draggable + resizable frame
 local frame = Instance.new("Frame")
 frame.Name = "MainFrame"
-frame.Size = UDim2.new(0, 340, 0, 520)
-frame.Position = UDim2.new(0, 100, 0.5, -260)
+frame.Size = UDim2.new(0, 340, 0, 280)
+frame.Position = UDim2.new(0, 100, 0.5, -140)
 frame.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
 frame.BorderSizePixel = 0
 frame.Visible = true
 frame.Active = true
 frame.Parent = screenGui
 
-local MIN_WIDTH, MIN_HEIGHT = 280, 320
+local MIN_WIDTH, MIN_HEIGHT = 280, 240
 
 local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 14)
@@ -360,19 +334,24 @@ layout.Padding = UDim.new(0, 8)
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 layout.Parent = scrollFrame
 
--- Helper to style a button consistently
-local function styleButton(button, color1, color2)
+-- ===== Helper: creates a TOGGLE-safe button (fixes the stuck-color bug) =====
+-- Uses a "BaseColor" attribute so hover effects always know the real current color,
+-- instead of a stale closure value that gets out of sync after toggling.
+local function createToggleButton(text, initialColor, layoutOrder)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, 0, 0, 38)
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 15
+    button.Text = text
+    button.AutoButtonColor = false
+    button.LayoutOrder = layoutOrder
+    button.BackgroundColor3 = initialColor
+    button.Parent = scrollFrame
+
     local btnCorner = Instance.new("UICorner")
     btnCorner.CornerRadius = UDim.new(0, 10)
     btnCorner.Parent = button
-
-    local btnGradient = Instance.new("UIGradient")
-    btnGradient.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, color1),
-        ColorSequenceKeypoint.new(1, color2),
-    }
-    btnGradient.Rotation = 90
-    btnGradient.Parent = button
 
     local btnStroke = Instance.new("UIStroke")
     btnStroke.Color = Color3.fromRGB(255, 255, 255)
@@ -380,63 +359,34 @@ local function styleButton(button, color1, color2)
     btnStroke.Thickness = 1
     btnStroke.Parent = button
 
-    button.AutoButtonColor = false
+    button:SetAttribute("BaseColor", initialColor)
+
     button.MouseEnter:Connect(function()
-        TweenService:Create(button, TweenInfo.new(0.15), {BackgroundColor3 = color1:Lerp(Color3.new(1,1,1), 0.1)}):Play()
+        local base = button:GetAttribute("BaseColor")
+        TweenService:Create(button, TweenInfo.new(0.15), {
+            BackgroundColor3 = base:Lerp(Color3.new(1, 1, 1), 0.15)
+        }):Play()
     end)
     button.MouseLeave:Connect(function()
-        TweenService:Create(button, TweenInfo.new(0.15), {BackgroundColor3 = color1}):Play()
+        local base = button:GetAttribute("BaseColor")
+        TweenService:Create(button, TweenInfo.new(0.15), {
+            BackgroundColor3 = base
+        }):Play()
     end)
-end
 
--- ===== SECTION LABEL: Locations =====
-local locLabel = Instance.new("TextLabel")
-locLabel.Size = UDim2.new(1, 0, 0, 18)
-locLabel.BackgroundTransparency = 1
-locLabel.Text = "TELEPORTS"
-locLabel.TextColor3 = Color3.fromRGB(150, 140, 190)
-locLabel.Font = Enum.Font.GothamBold
-locLabel.TextSize = 12
-locLabel.TextXAlignment = Enum.TextXAlignment.Left
-locLabel.LayoutOrder = 1
-locLabel.Parent = scrollFrame
-
--- ===== ALL LOCATION BUTTONS (Hub + Trial Mob 1-8) =====
-for i, loc in ipairs(locations) do
-    local isHub = (loc.name == "Hub")
-
-    local button = Instance.new("TextButton")
-    button.Name = loc.name
-    button.Size = UDim2.new(1, 0, 0, 34)
-    button.TextColor3 = Color3.fromRGB(255, 255, 255)
-    button.Font = Enum.Font.GothamMedium
-    button.TextSize = 14
-    button.Text = isHub and ("🏠  " .. loc.name) or ("📍  " .. loc.name)
-    button.LayoutOrder = 1 + i
-    button.Parent = scrollFrame
-
-    if isHub then
-        styleButton(button, Color3.fromRGB(52, 58, 80), Color3.fromRGB(40, 44, 62))
-    else
-        styleButton(button, Color3.fromRGB(60, 55, 90), Color3.fromRGB(45, 42, 70))
+    local function setColor(color)
+        button:SetAttribute("BaseColor", color)
+        button.BackgroundColor3 = color
     end
 
-    button.MouseButton1Click:Connect(function()
-        stopLoop()
-        cancelFarmTimer()
-        loopToggleButton.Text = "▶ Start Trial Mob Loop"
-        loopToggleButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
-        teleportTo(loc)
-    end)
+    return button, setColor
 end
-
-local locCount = #locations
 
 -- Loop delay input row
 local delayRow = Instance.new("Frame")
 delayRow.Size = UDim2.new(1, 0, 0, 36)
 delayRow.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
-delayRow.LayoutOrder = 2 + locCount
+delayRow.LayoutOrder = 1
 delayRow.Parent = scrollFrame
 
 local delayRowCorner = Instance.new("UICorner")
@@ -479,98 +429,43 @@ delayBox.FocusLost:Connect(function()
     end
 end)
 
--- Farm duration input row
-local durationRow = Instance.new("Frame")
-durationRow.Size = UDim2.new(1, 0, 0, 36)
-durationRow.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
-durationRow.LayoutOrder = 3 + locCount
-durationRow.Parent = scrollFrame
-
-local durationRowCorner = Instance.new("UICorner")
-durationRowCorner.CornerRadius = UDim.new(0, 10)
-durationRowCorner.Parent = durationRow
-
-local durationLabel = Instance.new("TextLabel")
-durationLabel.Size = UDim2.new(0.6, 0, 1, 0)
-durationLabel.Position = UDim2.new(0, 10, 0, 0)
-durationLabel.BackgroundTransparency = 1
-durationLabel.Text = "⏳  Farm duration (min)"
-durationLabel.TextColor3 = Color3.fromRGB(220, 220, 230)
-durationLabel.Font = Enum.Font.Gotham
-durationLabel.TextSize = 13
-durationLabel.TextXAlignment = Enum.TextXAlignment.Left
-durationLabel.Parent = durationRow
-
-local durationBox = Instance.new("TextBox")
-durationBox.Size = UDim2.new(0.32, 0, 0.7, 0)
-durationBox.Position = UDim2.new(0.66, 0, 0.15, 0)
-durationBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-durationBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-durationBox.Font = Enum.Font.GothamMedium
-durationBox.TextSize = 13
-durationBox.Text = tostring(farmDurationMinutes)
-durationBox.ClearTextOnFocus = false
-durationBox.Parent = durationRow
-
-local durationBoxCorner = Instance.new("UICorner")
-durationBoxCorner.CornerRadius = UDim.new(0, 6)
-durationBoxCorner.Parent = durationBox
-
-durationBox.FocusLost:Connect(function()
-    local num = tonumber(durationBox.Text)
-    if num and num > 0 and num <= 60 then
-        farmDurationMinutes = num
-        print("[TeleportGui] Farm duration set to " .. num .. " min")
-    else
-        durationBox.Text = tostring(farmDurationMinutes)
-    end
-end)
-
 -- Loop toggle button
-loopToggleButton = Instance.new("TextButton")
-loopToggleButton.Size = UDim2.new(1, 0, 0, 38)
-loopToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-loopToggleButton.Font = Enum.Font.GothamBold
-loopToggleButton.TextSize = 15
-loopToggleButton.Text = "▶ Start Trial Mob Loop"
-loopToggleButton.LayoutOrder = 4 + locCount
-loopToggleButton.Parent = scrollFrame
-styleButton(loopToggleButton, Color3.fromRGB(46, 204, 113), Color3.fromRGB(30, 160, 90))
+loopToggleButton, setLoopButtonColor = createToggleButton("▶ Start Trial Mob Loop", Color3.fromRGB(46, 204, 113), 2)
 
 loopToggleButton.MouseButton1Click:Connect(function()
     if looping then
         stopLoop()
-        cancelFarmTimer()
         loopToggleButton.Text = "▶ Start Trial Mob Loop"
-        loopToggleButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+        setLoopButtonColor(Color3.fromRGB(46, 204, 113))
     else
         startLoop()
-        startFarmTimer()
         loopToggleButton.Text = "■ Stop Loop"
-        loopToggleButton.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+        setLoopButtonColor(Color3.fromRGB(231, 76, 60))
     end
 end)
 
 -- AFK Farm toggle button
-afkFarmButton = Instance.new("TextButton")
-afkFarmButton.Size = UDim2.new(1, 0, 0, 38)
-afkFarmButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-afkFarmButton.Font = Enum.Font.GothamBold
-afkFarmButton.TextSize = 15
-afkFarmButton.Text = "🤖  AFK Farm: OFF"
-afkFarmButton.LayoutOrder = 5 + locCount
-afkFarmButton.Parent = scrollFrame
-styleButton(afkFarmButton, Color3.fromRGB(231, 76, 60), Color3.fromRGB(180, 55, 45))
+afkFarmButton, setAfkButtonColor = createToggleButton("🤖  AFK Farm: OFF", Color3.fromRGB(231, 76, 60), 3)
 
 afkFarmButton.MouseButton1Click:Connect(function()
     afkFarmEnabled = not afkFarmEnabled
     if afkFarmEnabled then
         afkFarmButton.Text = "🤖  AFK Farm: ON"
-        afkFarmButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+        setAfkButtonColor(Color3.fromRGB(46, 204, 113))
         print("[AFK Farm] Enabled at " .. os.date("%X"))
     else
         afkFarmButton.Text = "🤖  AFK Farm: OFF"
-        afkFarmButton.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+        setAfkButtonColor(Color3.fromRGB(231, 76, 60))
         print("[AFK Farm] Disabled at " .. os.date("%X"))
     end
+end)
+
+-- End Trial button (returns to position saved before AFK Farm's Hub teleport)
+local endTrialButton, setEndTrialColor = createToggleButton("🔙  End Trial (Return)", Color3.fromRGB(52, 58, 80), 4)
+
+endTrialButton.MouseButton1Click:Connect(function()
+    stopLoop()
+    loopToggleButton.Text = "▶ Start Trial Mob Loop"
+    setLoopButtonColor(Color3.fromRGB(46, 204, 113))
+    returnToSavedPosition()
 end)
