@@ -14,19 +14,42 @@ local locations = {
     {name = "Trial Mob 5", x = 694.6125488281875, y = 10.396934509217344, z = 13633.5009765625},
     {name = "Trial Mob 6", x = 722.7583078125,    y = 10.39693546295166,  z = 13639.6826171875},
     {name = "Trial Mob 7", x = 749.0018920898438, y = 10.39693546295166,  z = 13634.294921875},
+
+    -- Hard Trials location set
+    {name = "Hard Trial 1", x = 750.028564453125,  y = 10.39693546295166,  z = 13786.1943359375},
+    {name = "Hard Trial 2", x = 719.8189086914062, y = 10.396933555603027, z = 13779.3388671875},
+    {name = "Hard Trial 3", x = 691.44287109375,   y = 10.39693546295166,  z = 13779.7001953125},
+    {name = "Hard Trial 4", x = 654.3482055664062, y = 10.39693546295166,  z = 13764.970703125},
+    {name = "Hard Trial 5", x = 689.0128784179688, y = 10.39693546295166,  z = 13751.234375},
+    {name = "Hard Trial 6", x = 720.3519897460938, y = 10.39693546295166,  z = 13747.9326171875},
+    {name = "Hard Trial 7", x = 748.9859619140625, y = 10.39693546295166,  z = 13745.2578125},
+
+    -- NEW: staging point for the Hard Trial AFK schedule
+    {name = "Hard Hub", x = 907.2163696289062, y = 10.864291191101074, z = 13446.1650390625},
 }
 
-local hubLocation = locations[1]
-
-local trialMobLocations = {}
+local hubLocation = nil
+local hardHubLocation = nil
 for _, loc in ipairs(locations) do
-    if loc.name:match("^Trial Mob %d+$") then
-        table.insert(trialMobLocations, loc)
-    end
+    if loc.name == "Hub" then hubLocation = loc end
+    if loc.name == "Hard Hub" then hardHubLocation = loc end
 end
-table.sort(trialMobLocations, function(a, b)
-    return tonumber(a.name:match("%d+")) < tonumber(b.name:match("%d+"))
-end)
+
+local function collectSorted(pattern)
+    local list = {}
+    for _, loc in ipairs(locations) do
+        if loc.name:match(pattern) then
+            table.insert(list, loc)
+        end
+    end
+    table.sort(list, function(a, b)
+        return tonumber(a.name:match("%d+")) < tonumber(b.name:match("%d+"))
+    end)
+    return list
+end
+
+local trialMobLocations = collectSorted("^Trial Mob %d+$")
+local hardTrialLocations = collectSorted("^Hard Trial %d+$")
 
 -- ===== TELEPORT FUNCTION =====
 local function teleportTo(loc)
@@ -71,7 +94,7 @@ local function returnToSavedPosition()
     end
 end
 
--- ===== LOOP STATE =====
+-- ===== LOOP STATE (Trial Mob) =====
 local looping = false
 local loopDelay = 2
 local loopToggleButton, setLoopButtonColor -- forward declared
@@ -98,16 +121,55 @@ end
 
 local function resetLoopButtonVisual()
     if loopToggleButton and setLoopButtonColor then
-        loopToggleButton.Text = "▶ Start Trial Mob Loop"
+        loopToggleButton.Text = "▶ Start Loop"
         setLoopButtonColor(Color3.fromRGB(46, 204, 113))
+    end
+end
+
+-- ===== LOOP STATE (Hard Trials) =====
+local hardLooping = false
+local hardLoopToggleButton, setHardLoopButtonColor -- forward declared
+
+local function startHardLoop()
+    if hardLooping then return end
+    hardLooping = true
+    print("[TeleportGui] Hard Trials loop STARTED at " .. os.date("%X"))
+    task.spawn(function()
+        while hardLooping do
+            for _, loc in ipairs(hardTrialLocations) do
+                if not hardLooping then break end
+                teleportTo(loc)
+                task.wait(loopDelay)
+            end
+        end
+    end)
+end
+
+local function stopHardLoop()
+    hardLooping = false
+    print("[TeleportGui] Hard Trials loop STOPPED at " .. os.date("%X"))
+end
+
+local function resetHardLoopButtonVisual()
+    if hardLoopToggleButton and setHardLoopButtonColor then
+        hardLoopToggleButton.Text = "▶ Start Loop"
+        setHardLoopButtonColor(Color3.fromRGB(46, 204, 113))
     end
 end
 
 -- ===== AUTO-RETURN TIMER (user-configurable, capped 1-30 min, toggleable) =====
 local autoReturnMinutes = 25 -- default; user can change via GUI, clamped 1-30
-local autoReturnEnabled = true -- NEW: toggle on/off
+local autoReturnEnabled = true -- toggle on/off
 local autoReturnTimerId = 0
 local autoReturnButton, setAutoReturnButtonColor -- forward declared
+
+local function stopEverythingAndReturn()
+    stopLoop()
+    stopHardLoop()
+    resetLoopButtonVisual()
+    resetHardLoopButtonVisual()
+    returnToSavedPosition()
+end
 
 local function startAutoReturnTimer()
     if not autoReturnEnabled then
@@ -126,10 +188,8 @@ local function startAutoReturnTimer()
             print("[TeleportGui] Auto-return timer fired but feature is OFF -> skipping")
             return
         end
-        print(string.format("[TeleportGui] %d minutes elapsed -> stopping loop and returning to original position", autoReturnMinutes))
-        stopLoop()
-        resetLoopButtonVisual()
-        returnToSavedPosition()
+        print(string.format("[TeleportGui] %d minutes elapsed -> stopping loops and returning to original position", autoReturnMinutes))
+        stopEverythingAndReturn()
     end)
 end
 
@@ -137,49 +197,73 @@ local function cancelAutoReturnTimer()
     autoReturnTimerId += 1
 end
 
--- ===== AFK FARM SCHEDULE (every hour, real-life :29 and :59) =====
+-- ===== SHARED HUB-STAGING HELPER =====
+-- Repeatedly teleports to a staging point for HUB_REPEAT_DURATION seconds,
+-- waits, then starts the given loop and the auto-return timer.
+local HUB_REPEAT_DURATION = 15  -- seconds
+local HUB_REPEAT_INTERVAL = 1   -- seconds between each teleport
+
+local function runAfkStagingSequence(stagingLocation, startLoopFn, loopButton, setLoopButtonColorFn, stopLoopBtnText, tag)
+    print(string.format("[%s] Trigger match: :29/:59 -> saving position, staging at %s", tag, stagingLocation.name))
+    saveCurrentPosition()
+
+    local elapsed = 0
+    while elapsed < HUB_REPEAT_DURATION do
+        teleportTo(stagingLocation)
+        task.wait(HUB_REPEAT_INTERVAL)
+        elapsed += HUB_REPEAT_INTERVAL
+    end
+    print(string.format("[%s] Done staging -> waiting 10s before starting loop", tag))
+    task.wait(10)
+    print(string.format("[%s] Wait done -> starting loop and auto-return timer", tag))
+
+    startLoopFn()
+    if loopButton then
+        loopButton.Text = stopLoopBtnText
+        setLoopButtonColorFn(Color3.fromRGB(231, 76, 60))
+    end
+    startAutoReturnTimer()
+end
+
+-- ===== AFK FARM SCHEDULE — Trial Mob (every hour, real-life :29 and :59) =====
 local afkFarmEnabled = false
 local lastTriggeredMinuteKey = nil
 local afkFarmButton, setAfkButtonColor -- forward declared
-
--- NEW: how long / how often to repeatedly teleport to Hub before starting the loop
-local HUB_REPEAT_DURATION = 15  -- seconds
-local HUB_REPEAT_INTERVAL = 1   -- seconds between each teleport
 
 task.spawn(function()
     while true do
         if afkFarmEnabled then
             local t = os.date("*t")
             local key = os.date("%Y-%m-%d-%H-%M")
-
-            print(string.format("[AFK Farm] Checking... current time = %s (min=%d)", os.date("%X"), t.min))
-
             if key ~= lastTriggeredMinuteKey then
                 if t.min == 29 or t.min == 59 then
-                    print("[AFK Farm] Trigger match: :29/:59 -> saving position, repeat-teleporting to Hub")
-                    saveCurrentPosition()
-
-                    -- NEW: keep teleporting to Hub every 1s for 15s straight
-                    local elapsed = 0
-                    while elapsed < HUB_REPEAT_DURATION do
-                        teleportTo(hubLocation)
-                        task.wait(HUB_REPEAT_INTERVAL)
-                        elapsed += HUB_REPEAT_INTERVAL
-                    end
-                    print("[AFK Farm] Done repeat-teleporting to Hub -> waiting 10s before starting loop")
-                    task.wait(10)
-                    print("[AFK Farm] Wait done -> starting loop and auto-return timer")
-
                     if not looping then
-                        startLoop()
-                        if loopToggleButton then
-                            loopToggleButton.Text = "■ Stop Loop"
-                            setLoopButtonColor(Color3.fromRGB(231, 76, 60))
-                        end
+                        runAfkStagingSequence(hubLocation, startLoop, loopToggleButton, setLoopButtonColor, "■ Stop Loop", "AFK Farm")
                     end
-
-                    startAutoReturnTimer()
                     lastTriggeredMinuteKey = key
+                end
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+-- ===== AFK FARM SCHEDULE — Hard Trials (every hour, real-life :29 and :59) =====
+local afkHardFarmEnabled = false
+local lastHardTriggeredMinuteKey = nil
+local afkHardFarmButton, setAfkHardButtonColor -- forward declared
+
+task.spawn(function()
+    while true do
+        if afkHardFarmEnabled then
+            local t = os.date("*t")
+            local key = os.date("%Y-%m-%d-%H-%M")
+            if key ~= lastHardTriggeredMinuteKey then
+                if t.min == 29 or t.min == 59 then
+                    if not hardLooping then
+                        runAfkStagingSequence(hardHubLocation, startHardLoop, hardLoopToggleButton, setHardLoopButtonColor, "■ Stop Loop", "AFK Hard Trial")
+                    end
+                    lastHardTriggeredMinuteKey = key
                 end
             end
         end
@@ -226,15 +310,15 @@ toggleStroke.Parent = toggleButton
 -- Main draggable + resizable frame
 local frame = Instance.new("Frame")
 frame.Name = "MainFrame"
-frame.Size = UDim2.new(0, 340, 0, 380)
-frame.Position = UDim2.new(0, 100, 0.5, -190)
+frame.Size = UDim2.new(0, 360, 0, 480)
+frame.Position = UDim2.new(0, 100, 0.5, -240)
 frame.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
 frame.BorderSizePixel = 0
 frame.Visible = true
 frame.Active = true
 frame.Parent = screenGui
 
-local MIN_WIDTH, MIN_HEIGHT = 280, 300
+local MIN_WIDTH, MIN_HEIGHT = 300, 380
 
 local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 14)
@@ -399,13 +483,41 @@ layout.Padding = UDim.new(0, 8)
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 layout.Parent = scrollFrame
 
+-- ===== Helper: section header (organizes the GUI into labeled groups) =====
+local function createSectionHeader(text, layoutOrder)
+    local holder = Instance.new("Frame")
+    holder.Size = UDim2.new(1, 0, 0, 22)
+    holder.BackgroundTransparency = 1
+    holder.LayoutOrder = layoutOrder
+    holder.Parent = scrollFrame
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = Color3.fromRGB(150, 135, 210)
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = holder
+
+    local underline = Instance.new("Frame")
+    underline.Size = UDim2.new(1, 0, 0, 1)
+    underline.Position = UDim2.new(0, 0, 1, -2)
+    underline.BackgroundColor3 = Color3.fromRGB(70, 60, 100)
+    underline.BorderSizePixel = 0
+    underline.Parent = holder
+
+    return holder
+end
+
 -- ===== Helper: creates a TOGGLE-safe button (fixes the stuck-color bug) =====
-local function createToggleButton(text, initialColor, layoutOrder)
+local function createToggleButton(text, initialColor, layoutOrder, height)
     local button = Instance.new("TextButton")
-    button.Size = UDim2.new(1, 0, 0, 38)
+    button.Size = UDim2.new(1, 0, 0, height or 36)
     button.TextColor3 = Color3.fromRGB(255, 255, 255)
     button.Font = Enum.Font.GothamBold
-    button.TextSize = 15
+    button.TextSize = 14
     button.Text = text
     button.AutoButtonColor = false
     button.LayoutOrder = layoutOrder
@@ -445,43 +557,51 @@ local function createToggleButton(text, initialColor, layoutOrder)
     return button, setColor
 end
 
--- Loop delay input row
-local delayRow = Instance.new("Frame")
-delayRow.Size = UDim2.new(1, 0, 0, 36)
-delayRow.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
-delayRow.LayoutOrder = 1
-delayRow.Parent = scrollFrame
+-- Helper: labeled numeric input row (for settings section)
+local function createInputRow(labelText, defaultValue, layoutOrder)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+    row.LayoutOrder = layoutOrder
+    row.Parent = scrollFrame
 
-local delayRowCorner = Instance.new("UICorner")
-delayRowCorner.CornerRadius = UDim.new(0, 10)
-delayRowCorner.Parent = delayRow
+    local rowCorner = Instance.new("UICorner")
+    rowCorner.CornerRadius = UDim.new(0, 8)
+    rowCorner.Parent = row
 
-local delayLabel = Instance.new("TextLabel")
-delayLabel.Size = UDim2.new(0.6, 0, 1, 0)
-delayLabel.Position = UDim2.new(0, 10, 0, 0)
-delayLabel.BackgroundTransparency = 1
-delayLabel.Text = "⏱  Loop delay (s)"
-delayLabel.TextColor3 = Color3.fromRGB(220, 220, 230)
-delayLabel.Font = Enum.Font.Gotham
-delayLabel.TextSize = 13
-delayLabel.TextXAlignment = Enum.TextXAlignment.Left
-delayLabel.Parent = delayRow
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.62, 0, 1, 0)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = Color3.fromRGB(210, 210, 222)
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
 
-local delayBox = Instance.new("TextBox")
-delayBox.Size = UDim2.new(0.32, 0, 0.7, 0)
-delayBox.Position = UDim2.new(0.66, 0, 0.15, 0)
-delayBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-delayBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-delayBox.Font = Enum.Font.GothamMedium
-delayBox.TextSize = 13
-delayBox.Text = tostring(loopDelay)
-delayBox.ClearTextOnFocus = false
-delayBox.Parent = delayRow
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0.30, 0, 0.68, 0)
+    box.Position = UDim2.new(0.68, 0, 0.16, 0)
+    box.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.GothamMedium
+    box.TextSize = 12
+    box.Text = tostring(defaultValue)
+    box.ClearTextOnFocus = false
+    box.Parent = row
 
-local delayBoxCorner = Instance.new("UICorner")
-delayBoxCorner.CornerRadius = UDim.new(0, 6)
-delayBoxCorner.Parent = delayBox
+    local boxCorner = Instance.new("UICorner")
+    boxCorner.CornerRadius = UDim.new(0, 6)
+    boxCorner.Parent = box
 
+    return box
+end
+
+-- ===================== SECTION: SETTINGS =====================
+createSectionHeader("SETTINGS", 1)
+
+local delayBox = createInputRow("⏱  Loop delay (s)", loopDelay, 2)
 delayBox.FocusLost:Connect(function()
     local num = tonumber(delayBox.Text)
     if num and num > 0 then
@@ -492,43 +612,7 @@ delayBox.FocusLost:Connect(function()
     end
 end)
 
--- Auto-return duration input row
-local returnRow = Instance.new("Frame")
-returnRow.Size = UDim2.new(1, 0, 0, 36)
-returnRow.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
-returnRow.LayoutOrder = 2
-returnRow.Parent = scrollFrame
-
-local returnRowCorner = Instance.new("UICorner")
-returnRowCorner.CornerRadius = UDim.new(0, 10)
-returnRowCorner.Parent = returnRow
-
-local returnLabel = Instance.new("TextLabel")
-returnLabel.Size = UDim2.new(0.6, 0, 1, 0)
-returnLabel.Position = UDim2.new(0, 10, 0, 0)
-returnLabel.BackgroundTransparency = 1
-returnLabel.Text = "⏳  Auto-return after (min)"
-returnLabel.TextColor3 = Color3.fromRGB(220, 220, 230)
-returnLabel.Font = Enum.Font.Gotham
-returnLabel.TextSize = 13
-returnLabel.TextXAlignment = Enum.TextXAlignment.Left
-returnLabel.Parent = returnRow
-
-local returnBox = Instance.new("TextBox")
-returnBox.Size = UDim2.new(0.32, 0, 0.7, 0)
-returnBox.Position = UDim2.new(0.66, 0, 0.15, 0)
-returnBox.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-returnBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-returnBox.Font = Enum.Font.GothamMedium
-returnBox.TextSize = 13
-returnBox.Text = tostring(autoReturnMinutes)
-returnBox.ClearTextOnFocus = false
-returnBox.Parent = returnRow
-
-local returnBoxCorner = Instance.new("UICorner")
-returnBoxCorner.CornerRadius = UDim.new(0, 6)
-returnBoxCorner.Parent = returnBox
-
+local returnBox = createInputRow("⏳  Auto-return after (min)", autoReturnMinutes, 3)
 returnBox.FocusLost:Connect(function()
     local num = tonumber(returnBox.Text)
     if num then
@@ -543,9 +627,25 @@ returnBox.FocusLost:Connect(function()
     end
 end)
 
--- Loop toggle button
-loopToggleButton, setLoopButtonColor = createToggleButton("▶ Start Trial Mob Loop", Color3.fromRGB(46, 204, 113), 3)
+autoReturnButton, setAutoReturnButtonColor = createToggleButton("⏳  Auto-Return: ON", Color3.fromRGB(46, 204, 113), 4)
+autoReturnButton.MouseButton1Click:Connect(function()
+    autoReturnEnabled = not autoReturnEnabled
+    if autoReturnEnabled then
+        autoReturnButton.Text = "⏳  Auto-Return: ON"
+        setAutoReturnButtonColor(Color3.fromRGB(46, 204, 113))
+        print("[TeleportGui] Auto-Return enabled at " .. os.date("%X"))
+    else
+        autoReturnButton.Text = "⏳  Auto-Return: OFF"
+        setAutoReturnButtonColor(Color3.fromRGB(231, 76, 60))
+        cancelAutoReturnTimer()
+        print("[TeleportGui] Auto-Return disabled at " .. os.date("%X"))
+    end
+end)
 
+-- ===================== SECTION: MEDIUM TRIALS =====================
+createSectionHeader("MEDIUM TRIALS", 5)
+
+loopToggleButton, setLoopButtonColor = createToggleButton("▶ Start Loop", Color3.fromRGB(46, 204, 113), 6)
 loopToggleButton.MouseButton1Click:Connect(function()
     if looping then
         stopLoop()
@@ -558,45 +658,55 @@ loopToggleButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- Auto-Return toggle button (NEW)
-autoReturnButton, setAutoReturnButtonColor = createToggleButton("⏳  Auto-Return: ON", Color3.fromRGB(46, 204, 113), 4)
-
-autoReturnButton.MouseButton1Click:Connect(function()
-    autoReturnEnabled = not autoReturnEnabled
-    if autoReturnEnabled then
-        autoReturnButton.Text = "⏳  Auto-Return: ON"
-        setAutoReturnButtonColor(Color3.fromRGB(46, 204, 113))
-        print("[TeleportGui] Auto-Return enabled at " .. os.date("%X"))
-    else
-        autoReturnButton.Text = "⏳  Auto-Return: OFF"
-        setAutoReturnButtonColor(Color3.fromRGB(231, 76, 60))
-        cancelAutoReturnTimer() -- cancel any pending timer immediately when turned off
-        print("[TeleportGui] Auto-Return disabled at " .. os.date("%X"))
-    end
-end)
-
--- AFK Farm toggle button
-afkFarmButton, setAfkButtonColor = createToggleButton("🤖  AFK Farm: OFF", Color3.fromRGB(231, 76, 60), 5)
-
+afkFarmButton, setAfkButtonColor = createToggleButton("🤖  AFK Trial: OFF", Color3.fromRGB(231, 76, 60), 7)
 afkFarmButton.MouseButton1Click:Connect(function()
     afkFarmEnabled = not afkFarmEnabled
     if afkFarmEnabled then
-        afkFarmButton.Text = "🤖  AFK Farm: ON"
+        afkFarmButton.Text = "🤖  AFK Trial: ON"
         setAfkButtonColor(Color3.fromRGB(46, 204, 113))
         print("[AFK Farm] Enabled at " .. os.date("%X"))
     else
-        afkFarmButton.Text = "🤖  AFK Farm: OFF"
+        afkFarmButton.Text = "🤖  AFK Trial: OFF"
         setAfkButtonColor(Color3.fromRGB(231, 76, 60))
         print("[AFK Farm] Disabled at " .. os.date("%X"))
     end
 end)
 
--- End Trial button (manual return, also cancels the auto-return timer)
-local endTrialButton, setEndTrialColor = createToggleButton("🔙  End Trial (Return)", Color3.fromRGB(52, 58, 80), 6)
+-- ===================== SECTION: HARD TRIALS =====================
+createSectionHeader("HARD TRIALS", 8)
 
+hardLoopToggleButton, setHardLoopButtonColor = createToggleButton("▶ Start Loop", Color3.fromRGB(46, 204, 113), 9)
+hardLoopToggleButton.MouseButton1Click:Connect(function()
+    if hardLooping then
+        stopHardLoop()
+        cancelAutoReturnTimer()
+        resetHardLoopButtonVisual()
+    else
+        startHardLoop()
+        hardLoopToggleButton.Text = "■ Stop Loop"
+        setHardLoopButtonColor(Color3.fromRGB(231, 76, 60))
+    end
+end)
+
+afkHardFarmButton, setAfkHardButtonColor = createToggleButton("🤖  AFK Hard Trial: OFF (:29 / :59)", Color3.fromRGB(231, 76, 60), 10)
+afkHardFarmButton.MouseButton1Click:Connect(function()
+    afkHardFarmEnabled = not afkHardFarmEnabled
+    if afkHardFarmEnabled then
+        afkHardFarmButton.Text = "🤖  AFK Hard Trial: ON (:29 / :59)"
+        setAfkHardButtonColor(Color3.fromRGB(46, 204, 113))
+        print("[AFK Hard Trial] Enabled at " .. os.date("%X"))
+    else
+        afkHardFarmButton.Text = "🤖  AFK Hard Trial: OFF (:29 / :59)"
+        setAfkHardButtonColor(Color3.fromRGB(231, 76, 60))
+        print("[AFK Hard Trial] Disabled at " .. os.date("%X"))
+    end
+end)
+
+-- ===================== SECTION: CONTROLS =====================
+createSectionHeader("CONTROLS", 11)
+
+local endTrialButton, setEndTrialColor = createToggleButton("🔙  End Trial (Return)", Color3.fromRGB(52, 58, 80), 12, 40)
 endTrialButton.MouseButton1Click:Connect(function()
-    stopLoop()
     cancelAutoReturnTimer()
-    resetLoopButtonVisual()
-    returnToSavedPosition()
+    stopEverythingAndReturn()
 end)
